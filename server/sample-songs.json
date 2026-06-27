@@ -1,0 +1,32 @@
+[
+  {
+    "id": "sample-001",
+    "title": "샘플 노래 1",
+    "artist": "Kids",
+    "category": "A Cartoon Songs",
+    "audioUrl": "https://example.com/audio/sample-001.mp3",
+    "coverUrl": "https://example.com/covers/sample-001.webp",
+    "durationSeconds": 120,
+    "enabled": true
+  },
+  {
+    "id": "sample-002",
+    "title": "샘플 노래 2",
+    "artist": "Kids",
+    "category": "A Cartoon Songs",
+    "audioUrl": "https://example.com/audio/sample-002.mp3",
+    "coverUrl": "https://example.com/covers/sample-002.webp",
+    "durationSeconds": 98,
+    "enabled": true
+  },
+  {
+    "id": "sample-disabled",
+    "title": "숨김 샘플 노래",
+    "artist": "Kids",
+    "category": "B Cartoon Songs",
+    "audioUrl": "https://example.com/audio/sample-disabled.mp3",
+    "coverUrl": "https://example.com/covers/sample-disabled.webp",
+    "durationSeconds": 80,
+    "enabled": false
+  }
+]

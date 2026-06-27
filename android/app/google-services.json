@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "168771327351",
+    "project_id": "dohwi-player",
+    "storage_bucket": "dohwi-player.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:168771327351:android:ee5b8ab48f8b9b2de43d72",
+        "android_client_info": {
+          "package_name": "com.example.kids_music_player"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDB_NL_ZMjTnlRm5X3VE4pWQ92gQe7wdU8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

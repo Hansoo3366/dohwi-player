@@ -1,0 +1,15 @@
+[
+  {
+    "origin": ["*"],
+    "method": ["GET", "HEAD"],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Range",
+      "Accept-Ranges",
+      "Range",
+      "x-goog-meta-firebasestoragedownloadtokens"
+    ],
+    "maxAgeSeconds": 3600
+  }
+]
