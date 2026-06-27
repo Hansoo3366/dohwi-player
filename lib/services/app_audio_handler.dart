@@ -8,6 +8,7 @@ import 'package:just_audio/just_audio.dart';
 import '../models/song.dart';
 import 'audio_cache_service.dart';
 import 'cover_art_service.dart';
+import 'player_settings_store.dart';
 
 enum PlaybackRepeatMode { none, one, all }
 
@@ -17,6 +18,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     required CoverArtService coverArtService,
   }) : _cacheService = cacheService,
        _coverArtService = coverArtService {
+    _loadPersistedSettings();
     _player.playbackEventStream.listen((event) {
       _broadcastPlaybackState(event);
     });
@@ -50,6 +52,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
   final AudioPlayer _player = AudioPlayer();
   final AudioCacheService _cacheService;
   final CoverArtService _coverArtService;
+  final PlayerSettingsStore _settingsStore = PlayerSettingsStore();
   final currentIndexNotifier = ValueNotifier<int?>(null);
   final settingsNotifier = ValueNotifier<int>(0);
   final Random _random = Random();
@@ -150,6 +153,23 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     }
   }
 
+  Future<void> _loadPersistedSettings() async {
+    try {
+      final settings = await _settingsStore.load();
+      _repeatMode = settings.repeatMode;
+      _shuffleEnabled = settings.shuffleEnabled;
+      _speed = settings.speed;
+      await _player.setSpeed(_speed);
+      await _player.setLoopMode(
+        _repeatMode == PlaybackRepeatMode.one ? LoopMode.one : LoopMode.off,
+      );
+      _notifySettingsChanged();
+      _broadcastPlaybackState(_player.playbackEvent);
+    } catch (error, stackTrace) {
+      debugPrint('Failed to load player settings: $error\n$stackTrace');
+    }
+  }
+
   Future<void> _cacheSongInBackground(Song song) async {
     try {
       await _cacheService.cacheSong(song);
@@ -210,6 +230,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     await _player.setSpeed(_speed);
     _notifySettingsChanged();
     _broadcastPlaybackState(_player.playbackEvent);
+    unawaited(_settingsStore.saveSpeed(_speed));
   }
 
   void setAppRepeatMode(PlaybackRepeatMode mode) {
@@ -218,11 +239,13 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
       _repeatMode == PlaybackRepeatMode.one ? LoopMode.one : LoopMode.off,
     );
     _notifySettingsChanged();
+    unawaited(_settingsStore.saveRepeatMode(mode));
   }
 
   void setShuffleEnabled(bool enabled) {
     _shuffleEnabled = enabled;
     _notifySettingsChanged();
+    unawaited(_settingsStore.saveShuffleEnabled(enabled));
   }
 
   @override
