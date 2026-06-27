@@ -1,18 +1,21 @@
 import 'package:flutter/material.dart';
 
 import '../models/song.dart';
+import '../services/cover_art_service.dart';
 import '../theme/app_theme.dart';
 import 'cover_art.dart';
 
 class SongTile extends StatelessWidget {
   const SongTile({
     required this.song,
+    required this.coverArtService,
     required this.isActive,
     required this.onTap,
     super.key,
   });
 
   final Song song;
+  final CoverArtService coverArtService;
   final bool isActive;
   final VoidCallback onTap;
 
@@ -28,7 +31,11 @@ class SongTile extends StatelessWidget {
           padding: const EdgeInsets.all(10),
           child: Row(
             children: [
-              CoverArt(song: song, size: 60),
+              CoverArt(
+                song: song,
+                coverArtService: coverArtService,
+                size: 60,
+              ),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(

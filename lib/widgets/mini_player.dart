@@ -23,8 +23,19 @@ class MiniPlayer extends StatelessWidget {
           child: InkWell(
             onTap: () {
               Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => PlayerScreen(controller: controller),
+                PageRouteBuilder(
+                  pageBuilder: (context, animation, secondaryAnimation) =>
+                      PlayerScreen(controller: controller),
+                  transitionsBuilder: (context, animation, secondaryAnimation, child) {
+                    const begin = Offset(0.0, 1.0);
+                    const end = Offset.zero;
+                    const curve = Curves.easeOutCubic;
+                    final tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+                    return SlideTransition(
+                      position: animation.drive(tween),
+                      child: child,
+                    );
+                  },
                 ),
               );
             },
@@ -32,13 +43,9 @@ class MiniPlayer extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
               decoration: const BoxDecoration(
                 color: AppColors.surface,
-                boxShadow: [
-                  BoxShadow(
-                    color: Color(0x80000000),
-                    blurRadius: 24,
-                    offset: Offset(0, -8),
-                  ),
-                ],
+                border: Border(
+                  top: BorderSide(color: AppColors.surfaceAlt, width: 1),
+                ),
               ),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -54,7 +61,11 @@ class MiniPlayer extends StatelessWidget {
                       return Row(
                         children: [
                           if (song != null)
-                            CoverArt(song: song, size: coverSize)
+                            CoverArt(
+                              song: song,
+                              coverArtService: controller.coverArtService,
+                              size: coverSize,
+                            )
                           else
                             Container(
                               width: coverSize,

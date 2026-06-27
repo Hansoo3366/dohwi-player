@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import '../models/song.dart';
 import '../services/app_audio_handler.dart';
+import '../services/cover_art_service.dart';
 
 class PlayerController extends ChangeNotifier {
   PlayerController(this._audioHandler) {
@@ -16,6 +17,7 @@ class PlayerController extends ChangeNotifier {
   bool _isReady = false;
 
   AppAudioHandler get audioHandler => _audioHandler;
+  CoverArtService get coverArtService => _audioHandler.coverArtService;
   List<Song> get library => _library;
   List<Song> get songs => _songs;
   List<String> get categories {
@@ -25,9 +27,16 @@ class PlayerController extends ChangeNotifier {
   }
 
   String? get activeCategory => _activeCategory;
-  int? get currentIndex => _audioHandler.currentIndex;
-  Song? get currentSong =>
-      currentIndex == null ? null : _songs.elementAtOrNull(currentIndex!);
+  int? get currentIndex {
+    final playing = _audioHandler.playingSong;
+    if (playing == null) {
+      return null;
+    }
+    final index = _songs.indexWhere((song) => song.id == playing.id);
+    return index >= 0 ? index : null;
+  }
+
+  Song? get currentSong => _audioHandler.playingSong;
   bool get isPlaying => _audioHandler.player.playing;
   bool get hasSongs => _songs.isNotEmpty;
   PlaybackRepeatMode get repeatMode => _audioHandler.repeatMode;
@@ -35,9 +44,6 @@ class PlayerController extends ChangeNotifier {
   double get speed => _audioHandler.speed;
 
   Future<void> _init() async {
-    final session = await AudioSession.instance;
-    await session.configure(const AudioSessionConfiguration.music());
-
     _audioHandler.currentIndexNotifier.addListener(notifyListeners);
     _audioHandler.settingsNotifier.addListener(notifyListeners);
     _audioHandler.player.playerStateStream.listen((_) {
@@ -58,7 +64,7 @@ class PlayerController extends ChangeNotifier {
     _songs = category == null
         ? List.of(_library)
         : _library.where((song) => song.category == category).toList();
-    await _audioHandler.setSongs(_songs);
+    await _audioHandler.updateFilteredSongs(_songs);
     notifyListeners();
   }
 
@@ -77,12 +83,14 @@ class PlayerController extends ChangeNotifier {
       return;
     }
 
-    if (currentIndex == null && _songs.isNotEmpty) {
-      await playSongAt(0);
+    if (_audioHandler.playingSong != null) {
+      await _audioHandler.play();
       return;
     }
 
-    await _audioHandler.play();
+    if (_songs.isNotEmpty) {
+      await playSongAt(0);
+    }
   }
 
   Future<void> next() async {

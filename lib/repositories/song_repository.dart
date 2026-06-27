@@ -1,24 +1,42 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 
 import '../config/app_config.dart';
 import '../models/song.dart';
+import '../utils/id3_cover_extractor.dart';
 
 class SongRepository {
-  SongRepository({http.Client? client, FirebaseStorage? storage})
-    : _client = client ?? http.Client(),
-      _storage = storage ?? FirebaseStorage.instance;
+  SongRepository({
+    http.Client? client,
+    FirebaseStorage? storage,
+    FirebaseFirestore? firestore,
+  }) : _client = client ?? http.Client(),
+       _storage = storage ?? FirebaseStorage.instance,
+       _firestore = firestore ?? FirebaseFirestore.instanceFor(app: Firebase.app(), databaseId: AppConfig.firestoreDatabaseId);
 
   final http.Client _client;
   final FirebaseStorage _storage;
+  final FirebaseFirestore _firestore;
 
   Future<List<Song>> fetchSongs() async {
-    final storageSongs = await _fetchFirebaseStorageSongs();
-    if (storageSongs.isNotEmpty) {
-      return storageSongs;
+    final firestoreSongs = await _fetchFirestoreSongs();
+    if (firestoreSongs.isNotEmpty) {
+      return firestoreSongs;
+    }
+
+    if (AppConfig.useStorageFolderFallback) {
+      final storageSongs = await _fetchFirebaseStorageSongs();
+      if (storageSongs.isNotEmpty) {
+        return storageSongs;
+      }
     }
 
     try {
@@ -51,9 +69,123 @@ class SongRepository {
     }
   }
 
+  Future<List<Song>> _fetchFirestoreSongs() async {
+    try {
+      final snapshot = await _firestore
+          .collection(AppConfig.firestoreSongsCollection)
+          .get();
+
+      if (snapshot.docs.isEmpty) {
+        return const [];
+      }
+
+      final songs = <Song>[];
+      for (final doc in snapshot.docs) {
+        final song = await _songFromFirestoreDoc(doc);
+        if (song != null) {
+          songs.add(song);
+        }
+      }
+
+      songs.sort(_compareSongs);
+      return songs;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<Song?> _songFromFirestoreDoc(DocumentSnapshot doc) async {
+    final data = doc.data();
+    if (data is! Map<String, dynamic>) {
+      return null;
+    }
+
+    final enabled = data['enabled'] is bool ? data['enabled'] as bool : true;
+    if (!enabled) {
+      return null;
+    }
+
+    final id = _readString(data['id']) ?? doc.id;
+    final title = _readString(data['title']);
+    if (title == null) {
+      return null;
+    }
+
+    final audioPath = _readString(data['audioPath']);
+    final coverPath = _readString(data['coverPath']);
+    final audioUrlValue = _readString(data['audioUrl']);
+    Uri? audioUrl;
+    Uri? coverUrl;
+
+    if (audioPath != null) {
+      // Storage URL을 직접 생성하여 네트워크 요청(getDownloadURL)을 생략합니다.
+      final encodedPath = Uri.encodeComponent(audioPath);
+      audioUrl = Uri.parse('https://firebasestorage.googleapis.com/v0/b/dohwi-player.firebasestorage.app/o/$encodedPath?alt=media');
+    } else if (audioUrlValue != null) {
+      audioUrl = Uri.tryParse(audioUrlValue);
+    }
+
+    if (audioUrl == null) {
+      return null;
+    }
+
+    if (coverPath != null) {
+      final encodedCoverPath = Uri.encodeComponent(coverPath);
+      coverUrl = Uri.parse('https://firebasestorage.googleapis.com/v0/b/dohwi-player.firebasestorage.app/o/$encodedCoverPath?alt=media');
+    }
+
+    final durationSeconds = data['durationSeconds'];
+    final coverUrlValue = _readString(data['coverUrl']);
+    if (coverUrl == null && coverUrlValue != null) {
+      coverUrl = Uri.tryParse(coverUrlValue);
+    }
+
+    return Song(
+      id: id,
+      title: title,
+      artist: _readString(data['artist']) ?? '도휘 플레이어',
+      category: _readString(data['category']) ?? '기본',
+      audioUrl: audioUrl,
+      coverUrl: coverUrl,
+      embeddedCoverBytes: null, // 서버에서 추출하므로 로컬 추출은 더 이상 사용하지 않음
+      duration: durationSeconds is num
+          ? Duration(seconds: durationSeconds.round())
+          : null,
+      enabled: true,
+    );
+  }
+
+  int _compareSongs(Song a, Song b) {
+    return a.category.compareTo(b.category) != 0
+        ? a.category.compareTo(b.category)
+        : a.title.compareTo(b.title);
+  }
+
   Future<List<Song>> _fetchFirebaseStorageSongs() async {
     try {
-      final folderRef = _storage.ref(AppConfig.firebaseSongsFolder);
+      final songs = <Song>[];
+
+      for (final source in AppConfig.storageFolderFallback) {
+        final folderSongs = await _fetchSongsFromFolder(
+          folder: source.folder,
+          category: source.category,
+        );
+        songs.addAll(folderSongs);
+      }
+
+      songs.sort((a, b) => a.title.compareTo(b.title));
+      return songs;
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  Future<List<Song>> _fetchSongsFromFolder({
+    required String folder,
+    required String category,
+  }) async {
+    try {
+      final folderRef = _storage.ref(folder);
       final result = await folderRef.listAll();
       final fileRefs =
           result.items
@@ -61,175 +193,59 @@ class SongRepository {
               .toList(growable: false)
             ..sort((a, b) => a.fullPath.compareTo(b.fullPath));
 
-      final songs = <Song>[];
-      for (final ref in fileRefs) {
-        final url = await ref.getDownloadURL();
-        final audioUrl = Uri.parse(url);
-        songs.add(
-          Song(
+      return Future.wait(
+        fileRefs.map((ref) async {
+          final urlFuture = ref.getDownloadURL();
+          final coverFuture = _fetchEmbeddedCoverFromStorage(ref);
+          final url = await urlFuture;
+          final audioUrl = Uri.parse(url);
+          final coverBytes =
+              await coverFuture ?? await _fetchEmbeddedCoverFromUrl(audioUrl);
+          return Song(
             id: _songIdFromPath(ref.fullPath),
             title: _titleFromFileName(ref.name),
             artist: '도휘 플레이어',
-            category: AppConfig.firebaseSongsCategory,
+            category: category,
             audioUrl: audioUrl,
-            embeddedCoverBytes: await _tryReadEmbeddedCoverFromStorage(ref),
-          ),
-        );
-      }
-
-      return songs;
+            embeddedCoverBytes: coverBytes,
+          );
+        }),
+      );
     } catch (_) {
       return const [];
     }
   }
 
-  Future<Uint8List?> _tryReadEmbeddedCoverFromStorage(Reference ref) async {
+  Future<Uint8List?> _fetchEmbeddedCoverFromStorage(Reference ref) async {
     try {
-      final bytes = await ref.getData(AppConfig.maxEmbeddedCoverReadBytes);
-      if (bytes == null) {
+      final bytes = await ref.getData(AppConfig.maxCoverHeaderBytes);
+      if (bytes == null || bytes.isEmpty) {
         return null;
       }
-      return _extractId3Cover(bytes);
+      return Id3CoverExtractor.fromBytes(bytes);
     } catch (_) {
       return null;
     }
   }
 
-  Uint8List? _extractId3Cover(Uint8List bytes) {
-    if (bytes.length < 20 ||
-        bytes[0] != 0x49 ||
-        bytes[1] != 0x44 ||
-        bytes[2] != 0x33) {
+  Future<Uint8List?> _fetchEmbeddedCoverFromUrl(Uri audioUrl) async {
+    try {
+      final end = AppConfig.maxCoverHeaderBytes - 1;
+      final request = http.Request('GET', audioUrl)
+        ..headers['Range'] = 'bytes=0-$end';
+      final response = await _client.send(request);
+      if (response.statusCode != 206 && response.statusCode != 200) {
+        return null;
+      }
+
+      final bytes = await http.ByteStream(response.stream).toBytes();
+      if (bytes.isEmpty) {
+        return null;
+      }
+      return Id3CoverExtractor.fromBytes(bytes);
+    } catch (_) {
       return null;
     }
-
-    final version = bytes[3];
-    if (version != 3 && version != 4) {
-      return null;
-    }
-
-    final tagSize =
-        ((bytes[6] & 0x7F) << 21) |
-        ((bytes[7] & 0x7F) << 14) |
-        ((bytes[8] & 0x7F) << 7) |
-        (bytes[9] & 0x7F);
-    final tagEnd = (10 + tagSize).clamp(10, bytes.length);
-
-    var offset = 10;
-    while (offset + 10 <= tagEnd) {
-      final frameId = String.fromCharCodes(bytes.sublist(offset, offset + 4));
-      final frameSize = version == 4
-          ? ((bytes[offset + 4] & 0x7F) << 21) |
-                ((bytes[offset + 5] & 0x7F) << 14) |
-                ((bytes[offset + 6] & 0x7F) << 7) |
-                (bytes[offset + 7] & 0x7F)
-          : (bytes[offset + 4] << 24) |
-                (bytes[offset + 5] << 16) |
-                (bytes[offset + 6] << 8) |
-                bytes[offset + 7];
-
-      if (frameId.trim().isEmpty || frameSize <= 0) {
-        break;
-      }
-
-      final payloadStart = offset + 10;
-      final payloadEnd = (payloadStart + frameSize).clamp(payloadStart, tagEnd);
-      if (frameId == 'APIC') {
-        return _extractImageBytes(bytes.sublist(payloadStart, payloadEnd));
-      }
-
-      offset = payloadEnd;
-    }
-
-    return null;
-  }
-
-  Uint8List? _extractImageBytes(Uint8List payload) {
-    final jpgStart = _indexOfBytes(payload, [0xFF, 0xD8, 0xFF]);
-    if (jpgStart != -1) {
-      final jpgEnd = _lastIndexOfBytes(payload, [0xFF, 0xD9]);
-      if (jpgEnd > jpgStart) {
-        return Uint8List.fromList(payload.sublist(jpgStart, jpgEnd + 2));
-      }
-    }
-
-    final pngStart = _indexOfBytes(payload, [
-      0x89,
-      0x50,
-      0x4E,
-      0x47,
-      0x0D,
-      0x0A,
-      0x1A,
-      0x0A,
-    ]);
-    if (pngStart != -1) {
-      final pngEnd = _indexOfBytes(payload, [
-        0x49,
-        0x45,
-        0x4E,
-        0x44,
-        0xAE,
-        0x42,
-        0x60,
-        0x82,
-      ]);
-      if (pngEnd > pngStart) {
-        return Uint8List.fromList(payload.sublist(pngStart, pngEnd + 8));
-      }
-    }
-
-    final webpStart = _indexOfBytes(payload, [0x52, 0x49, 0x46, 0x46]);
-    if (webpStart != -1 && webpStart + 12 < payload.length) {
-      final hasWebp =
-          payload[webpStart + 8] == 0x57 &&
-          payload[webpStart + 9] == 0x45 &&
-          payload[webpStart + 10] == 0x42 &&
-          payload[webpStart + 11] == 0x50;
-      if (hasWebp) {
-        final size =
-            payload[webpStart + 4] |
-            (payload[webpStart + 5] << 8) |
-            (payload[webpStart + 6] << 16) |
-            (payload[webpStart + 7] << 24);
-        final end = (webpStart + 8 + size).clamp(webpStart, payload.length);
-        return Uint8List.fromList(payload.sublist(webpStart, end));
-      }
-    }
-
-    return null;
-  }
-
-  int _indexOfBytes(Uint8List bytes, List<int> pattern) {
-    for (var i = 0; i <= bytes.length - pattern.length; i++) {
-      var matched = true;
-      for (var j = 0; j < pattern.length; j++) {
-        if (bytes[i + j] != pattern[j]) {
-          matched = false;
-          break;
-        }
-      }
-      if (matched) {
-        return i;
-      }
-    }
-    return -1;
-  }
-
-  int _lastIndexOfBytes(Uint8List bytes, List<int> pattern) {
-    for (var i = bytes.length - pattern.length; i >= 0; i--) {
-      var matched = true;
-      for (var j = 0; j < pattern.length; j++) {
-        if (bytes[i + j] != pattern[j]) {
-          matched = false;
-          break;
-        }
-      }
-      if (matched) {
-        return i;
-      }
-    }
-    return -1;
   }
 
   bool _isSupportedAudio(String fileName) {
@@ -242,11 +258,9 @@ class SongRepository {
   }
 
   String _songIdFromPath(String fullPath) {
-    return fullPath
-        .toLowerCase()
-        .replaceAll(RegExp(r'\.[a-z0-9]+$'), '')
-        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
-        .replaceAll(RegExp(r'^-+|-+$'), '');
+    final normalized = fullPath.trim().toLowerCase();
+    final encoded = base64Url.encode(utf8.encode(normalized)).replaceAll('=', '');
+    return 'fs-$encoded';
   }
 
   String _titleFromFileName(String fileName) {
@@ -256,6 +270,14 @@ class SongRepository {
         .replaceAll(RegExp(r'\s+'), ' ')
         .trim();
     return cleaned.isEmpty ? fileName : cleaned;
+  }
+
+  String? _readString(Object? value) {
+    if (value is! String) {
+      return null;
+    }
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
   }
 
   Song? _tryParseSong(Map<String, dynamic> json) {

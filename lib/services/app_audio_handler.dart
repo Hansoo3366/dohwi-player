@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:audio_service/audio_service.dart';
@@ -5,17 +6,28 @@ import 'package:flutter/foundation.dart';
 import 'package:just_audio/just_audio.dart';
 
 import '../models/song.dart';
+import 'audio_cache_service.dart';
+import 'cover_art_service.dart';
 
 enum PlaybackRepeatMode { none, one, all }
 
 class AppAudioHandler extends BaseAudioHandler with SeekHandler {
-  AppAudioHandler() {
-    _player.playbackEventStream.listen(_broadcastPlaybackState);
+  AppAudioHandler._({
+    required AudioCacheService cacheService,
+    required CoverArtService coverArtService,
+  }) : _cacheService = cacheService,
+       _coverArtService = coverArtService {
+    _player.playbackEventStream.listen((event) {
+      _broadcastPlaybackState(event);
+    });
     _player.durationStream.listen((duration) {
       final song = currentSong;
       if (song != null && duration != null) {
         mediaItem.add(_toMediaItem(song, duration: duration));
       }
+    });
+    _player.playingStream.listen((playing) {
+      _broadcastPlaybackState(_player.playbackEvent);
     });
     _player.processingStateStream.listen((state) {
       if (state == ProcessingState.completed) {
@@ -24,36 +36,62 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     });
   }
 
+  factory AppAudioHandler({
+    AudioCacheService? cacheService,
+    CoverArtService? coverArtService,
+  }) {
+    final cache = cacheService ?? AudioCacheService();
+    return AppAudioHandler._(
+      cacheService: cache,
+      coverArtService: coverArtService ?? CoverArtService(),
+    );
+  }
+
   final AudioPlayer _player = AudioPlayer();
+  final AudioCacheService _cacheService;
+  final CoverArtService _coverArtService;
   final currentIndexNotifier = ValueNotifier<int?>(null);
   final settingsNotifier = ValueNotifier<int>(0);
   final Random _random = Random();
   List<Song> _songs = [];
+  Song? _playingSong;
   PlaybackRepeatMode _repeatMode = PlaybackRepeatMode.none;
   bool _shuffleEnabled = false;
   double _speed = 1;
   int _loadSequence = 0;
 
   AudioPlayer get player => _player;
+  AudioCacheService get cacheService => _cacheService;
+  CoverArtService get coverArtService => _coverArtService;
   List<Song> get songs => List.unmodifiable(_songs);
+  Song? get playingSong => _playingSong;
   int? get currentIndex => currentIndexNotifier.value;
   PlaybackRepeatMode get repeatMode => _repeatMode;
   bool get shuffleEnabled => _shuffleEnabled;
   double get speed => _speed;
-  Song? get currentSong {
-    final index = currentIndex;
-    if (index == null || index < 0 || index >= _songs.length) {
-      return null;
-    }
-    return _songs[index];
-  }
+  Song? get currentSong => _playingSong;
 
   Future<void> setSongs(List<Song> songs) async {
     await _player.stop();
     _songs = songs;
+    _playingSong = null;
     currentIndexNotifier.value = null;
     queue.add(songs.map(_toMediaItem).toList(growable: false));
     mediaItem.add(null);
+    _broadcastPlaybackState(_player.playbackEvent);
+  }
+
+  Future<void> updateFilteredSongs(List<Song> songs) async {
+    _songs = songs;
+    queue.add(songs.map(_toMediaItem).toList(growable: false));
+
+    if (_playingSong != null) {
+      final newIndex = songs.indexWhere((song) => song.id == _playingSong!.id);
+      currentIndexNotifier.value = newIndex >= 0 ? newIndex : null;
+    } else {
+      currentIndexNotifier.value = null;
+    }
+
     _broadcastPlaybackState(_player.playbackEvent);
   }
 
@@ -64,13 +102,69 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
 
     final sequence = ++_loadSequence;
     final song = _songs[index];
+    _playingSong = song;
     await _player.stop();
     currentIndexNotifier.value = index;
     mediaItem.add(_toMediaItem(song));
     _broadcastPlaybackState(_player.playbackEvent);
 
+    try {
+      final cachedPath = await _cacheService.getCachedPath(song);
+      if (sequence != _loadSequence) {
+        return;
+      }
+
+      if (cachedPath != null) {
+        await _startPlayback(
+          song: song,
+          source: AudioSource.file(cachedPath),
+          sequence: sequence,
+        );
+        return;
+      }
+
+      unawaited(_cacheSongInBackground(song));
+
+      await _startPlayback(
+        song: song,
+        source: AudioSource.uri(song.audioUrl),
+        sequence: sequence,
+      );
+    } catch (error, stackTrace) {
+      debugPrint('Playback failed for ${song.id}: $error\n$stackTrace');
+      if (sequence != _loadSequence) {
+        return;
+      }
+
+      try {
+        await _startPlayback(
+          song: song,
+          source: AudioSource.uri(song.audioUrl),
+          sequence: sequence,
+        );
+      } catch (fallbackError, fallbackStackTrace) {
+        debugPrint(
+          'Fallback playback failed for ${song.id}: $fallbackError\n$fallbackStackTrace',
+        );
+      }
+    }
+  }
+
+  Future<void> _cacheSongInBackground(Song song) async {
+    try {
+      await _cacheService.cacheSong(song);
+    } catch (error, stackTrace) {
+      debugPrint('Background cache failed for ${song.id}: $error\n$stackTrace');
+    }
+  }
+
+  Future<void> _startPlayback({
+    required Song song,
+    required AudioSource source,
+    required int sequence,
+  }) async {
     final duration = await _player.setAudioSource(
-      AudioSource.uri(song.audioUrl),
+      source,
       initialPosition: Duration.zero,
     );
     if (sequence != _loadSequence) {
@@ -83,23 +177,32 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     if (duration != null) {
       mediaItem.add(_toMediaItem(song, duration: duration));
     }
-    await play();
+    _player.play(); // await 제거
   }
 
   @override
-  Future<void> play() => _player.play();
+  Future<void> play() async {
+    // 백그라운드 서비스가 멈추지 않도록 await 하지 않음
+    _player.play();
+  }
 
   @override
-  Future<void> pause() => _player.pause();
+  Future<void> pause() async {
+    _player.pause();
+  }
 
   @override
   Future<void> stop() async {
     await _player.stop();
+    _playingSong = null;
+    currentIndexNotifier.value = null;
     return super.stop();
   }
 
   @override
-  Future<void> seek(Duration position) => _player.seek(position);
+  Future<void> seek(Duration position) async {
+    _player.seek(position);
+  }
 
   @override
   Future<void> setSpeed(double speed) async {
@@ -139,12 +242,20 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     if (_songs.isEmpty) {
       return;
     }
+
+    // 재생 중인 위치가 3초 이상이면 현재 곡을 처음부터 다시 재생
+    if (_player.position > const Duration(seconds: 3)) {
+      await _player.seek(Duration.zero);
+      return;
+    }
+
     final previousIndex = _previousIndex();
     await playSongAtIndex(previousIndex);
   }
 
   Future<void> dispose() async {
     currentIndexNotifier.dispose();
+    _cacheService.dispose();
     await _player.dispose();
   }
 
@@ -222,6 +333,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
 
   void _broadcastPlaybackState(PlaybackEvent event) {
     final playing = _player.playing;
+    final processingState = _mapProcessingState(event.processingState);
 
     playbackState.add(
       PlaybackState(
@@ -235,12 +347,18 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
           MediaAction.seek,
           MediaAction.seekForward,
           MediaAction.seekBackward,
+          MediaAction.play,
+          MediaAction.pause,
+          MediaAction.playPause,
+          MediaAction.skipToNext,
+          MediaAction.skipToPrevious,
+          MediaAction.stop,
         },
         androidCompactActionIndices: const [0, 1, 2],
-        processingState: _mapProcessingState(_player.processingState),
+        processingState: processingState,
         playing: playing,
-        updatePosition: _player.position,
-        bufferedPosition: _player.bufferedPosition,
+        updatePosition: event.updatePosition,
+        bufferedPosition: event.bufferedPosition,
         speed: _speed,
         queueIndex: currentIndex,
       ),

@@ -32,6 +32,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<List<Song>> _loadSongs() async {
     final songs = await widget.songRepository.fetchSongs();
+    widget.playerController.coverArtService.loadFromSongs(songs);
     await widget.playerController.setLibrary(songs);
     return songs;
   }
@@ -83,6 +84,8 @@ class _HomeScreenState extends State<HomeScreen> {
                               itemBuilder: (context, index) {
                                 return SongTile(
                                   song: songs[index],
+                                  coverArtService:
+                                      widget.playerController.coverArtService,
                                   isActive:
                                       widget.playerController.currentIndex ==
                                       index,

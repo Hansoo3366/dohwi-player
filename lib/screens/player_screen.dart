@@ -49,7 +49,11 @@ class PlayerScreen extends StatelessWidget {
                   ),
                   const Spacer(),
                   if (song != null)
-                    CoverArt(song: song, size: coverSize.toDouble())
+                    CoverArt(
+                      song: song,
+                      coverArtService: controller.coverArtService,
+                      size: coverSize.toDouble(),
+                    )
                   else
                     Container(
                       width: coverSize.toDouble(),
