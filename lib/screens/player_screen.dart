@@ -27,12 +27,10 @@ class _PlayerScreenState extends State<PlayerScreen> {
 
   void _handleVerticalDragUpdate(DragUpdateDetails details) {
     final delta = details.primaryDelta ?? 0;
-    if (delta <= 0) {
-      return;
-    }
-
     setState(() {
-      _verticalDragDistance += delta;
+      _verticalDragDistance = (_verticalDragDistance + delta)
+          .clamp(0, 140)
+          .toDouble();
     });
   }
 
