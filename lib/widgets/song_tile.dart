@@ -10,6 +10,7 @@ class SongTile extends StatelessWidget {
     required this.song,
     required this.coverArtService,
     required this.isActive,
+    required this.isPlaying,
     required this.onTap,
     super.key,
   });
@@ -17,6 +18,7 @@ class SongTile extends StatelessWidget {
   final Song song;
   final CoverArtService coverArtService;
   final bool isActive;
+  final bool isPlaying;
   final VoidCallback onTap;
 
   @override
@@ -31,11 +33,7 @@ class SongTile extends StatelessWidget {
           padding: const EdgeInsets.all(10),
           child: Row(
             children: [
-              CoverArt(
-                song: song,
-                coverArtService: coverArtService,
-                size: 60,
-              ),
+              CoverArt(song: song, coverArtService: coverArtService, size: 60),
               const SizedBox(width: 12),
               Expanded(
                 child: Column(
@@ -67,14 +65,34 @@ class SongTile extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              Icon(
-                isActive ? Icons.equalizer : Icons.play_arrow_rounded,
-                color: isActive ? AppColors.accent : AppColors.textPrimary,
-              ),
+              _SongStatusIcon(isActive: isActive, isPlaying: isPlaying),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+class _SongStatusIcon extends StatelessWidget {
+  const _SongStatusIcon({required this.isActive, required this.isPlaying});
+
+  final bool isActive;
+  final bool isPlaying;
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = isActive
+        ? (isPlaying ? Icons.graphic_eq_rounded : Icons.pause_rounded)
+        : Icons.play_arrow_rounded;
+    final foreground = isActive ? Colors.black : AppColors.textPrimary;
+    final background = isActive ? AppColors.accent : AppColors.surfaceAlt;
+
+    return Container(
+      width: 38,
+      height: 38,
+      decoration: BoxDecoration(color: background, shape: BoxShape.circle),
+      child: Icon(icon, color: foreground, size: 22),
     );
   }
 }

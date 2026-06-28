@@ -22,12 +22,22 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
+  static const double _songItemExtent = 88;
+
   late Future<List<Song>> _songsFuture;
+  final ScrollController _songListController = ScrollController();
+  int? _lastScrolledIndex;
 
   @override
   void initState() {
     super.initState();
     _songsFuture = _loadSongs();
+  }
+
+  @override
+  void dispose() {
+    _songListController.dispose();
+    super.dispose();
   }
 
   Future<List<Song>> _loadSongs() async {
@@ -40,6 +50,28 @@ class _HomeScreenState extends State<HomeScreen> {
   void _retry() {
     setState(() {
       _songsFuture = _loadSongs();
+    });
+  }
+
+  void _scrollToCurrentSong() {
+    final index = widget.playerController.currentIndex;
+    if (index == null || index == _lastScrolledIndex) {
+      return;
+    }
+
+    _lastScrolledIndex = index;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_songListController.hasClients) {
+        return;
+      }
+
+      final maxOffset = _songListController.position.maxScrollExtent;
+      final targetOffset = (index * _songItemExtent).clamp(0.0, maxOffset);
+      _songListController.animateTo(
+        targetOffset,
+        duration: const Duration(milliseconds: 320),
+        curve: Curves.easeOutCubic,
+      );
     });
   }
 
@@ -71,24 +103,31 @@ class _HomeScreenState extends State<HomeScreen> {
                     animation: widget.playerController,
                     builder: (context, _) {
                       final songs = widget.playerController.songs;
+                      _scrollToCurrentSong();
 
                       return Column(
                         children: [
                           _CategoryFilter(controller: widget.playerController),
                           Expanded(
                             child: ListView.separated(
+                              controller: _songListController,
                               padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
                               itemCount: songs.length,
                               separatorBuilder: (_, _) =>
                                   const SizedBox(height: 8),
                               itemBuilder: (context, index) {
+                                final isActive =
+                                    widget.playerController.currentIndex ==
+                                    index;
+
                                 return SongTile(
                                   song: songs[index],
                                   coverArtService:
                                       widget.playerController.coverArtService,
-                                  isActive:
-                                      widget.playerController.currentIndex ==
-                                      index,
+                                  isActive: isActive,
+                                  isPlaying:
+                                      isActive &&
+                                      widget.playerController.isPlaying,
                                   onTap: () =>
                                       widget.playerController.playSongAt(index),
                                 );
@@ -222,7 +261,17 @@ class _LoadingState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Center(
-      child: CircularProgressIndicator(color: AppColors.accent),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          CircularProgressIndicator(color: AppColors.accent),
+          SizedBox(height: 16),
+          Text(
+            '노래를 불러오는 중이에요',
+            style: TextStyle(color: AppColors.textSecondary),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -242,7 +291,16 @@ class _ErrorState extends StatelessWidget {
           children: [
             const Icon(Icons.wifi_off, color: AppColors.error, size: 40),
             const SizedBox(height: 12),
-            const Text('곡 목록을 불러오지 못했어요'),
+            const Text(
+              '곡 목록을 불러오지 못했어요',
+              style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              '인터넷 연결이나 Firebase 설정을 확인해주세요',
+              textAlign: TextAlign.center,
+              style: TextStyle(color: AppColors.textSecondary),
+            ),
             const SizedBox(height: 16),
             FilledButton(onPressed: onRetry, child: const Text('다시 시도')),
           ],
@@ -257,6 +315,11 @@ class _EmptyState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(child: Text('곡이 없어요'));
+    return const Center(
+      child: Text(
+        '아직 올려둔 노래가 없어요',
+        style: TextStyle(color: AppColors.textSecondary),
+      ),
+    );
   }
 }

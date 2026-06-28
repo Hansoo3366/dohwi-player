@@ -109,9 +109,9 @@ class PlayerController extends ChangeNotifier {
 
   void cycleRepeatMode() {
     final next = switch (repeatMode) {
-      PlaybackRepeatMode.none => PlaybackRepeatMode.one,
-      PlaybackRepeatMode.one => PlaybackRepeatMode.all,
-      PlaybackRepeatMode.all => PlaybackRepeatMode.none,
+      PlaybackRepeatMode.none => PlaybackRepeatMode.all,
+      PlaybackRepeatMode.all => PlaybackRepeatMode.one,
+      PlaybackRepeatMode.one => PlaybackRepeatMode.none,
     };
     _audioHandler.setAppRepeatMode(next);
     notifyListeners();
