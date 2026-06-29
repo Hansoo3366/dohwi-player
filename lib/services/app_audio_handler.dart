@@ -13,11 +13,12 @@ import 'player_settings_store.dart';
 enum PlaybackRepeatMode { none, one, all }
 
 class AppAudioHandler extends BaseAudioHandler with SeekHandler {
+  static const int _retainedShuffleHistoryCycles = 3;
+
   AppAudioHandler._({
-    required AudioCacheService cacheService,
-    required CoverArtService coverArtService,
-  }) : _cacheService = cacheService,
-       _coverArtService = coverArtService {
+    required this._cacheService,
+    required this._coverArtService,
+  }) {
     _loadPersistedSettings();
     _player.playbackEventStream.listen((event) {
       _broadcastPlaybackState(event);
@@ -57,6 +58,8 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
   final settingsNotifier = ValueNotifier<int>(0);
   final Random _random = Random();
   List<Song> _songs = [];
+  List<int> _shuffleOrder = [];
+  int _shuffleCursor = -1;
   Song? _playingSong;
   PlaybackRepeatMode _repeatMode = PlaybackRepeatMode.none;
   bool _shuffleEnabled = false;
@@ -77,6 +80,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
   Future<void> setSongs(List<Song> songs) async {
     await _player.stop();
     _songs = songs;
+    _resetShuffleQueue();
     _playingSong = null;
     currentIndexNotifier.value = null;
     queue.add(songs.map(_toMediaItem).toList(growable: false));
@@ -95,10 +99,23 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
       currentIndexNotifier.value = null;
     }
 
+    if (_shuffleEnabled) {
+      _buildShuffleQueue(startIndex: currentIndexNotifier.value);
+    } else {
+      _resetShuffleQueue();
+    }
+
     _broadcastPlaybackState(_player.playbackEvent);
   }
 
-  Future<void> playSongAtIndex(int index) async {
+  Future<void> playSongAtIndex(int index) {
+    return _playSongAtIndex(index, resetShuffleQueue: true);
+  }
+
+  Future<void> _playSongAtIndex(
+    int index, {
+    required bool resetShuffleQueue,
+  }) async {
     if (index < 0 || index >= _songs.length) {
       return;
     }
@@ -108,6 +125,9 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     _playingSong = song;
     await _player.stop();
     currentIndexNotifier.value = index;
+    if (_shuffleEnabled && resetShuffleQueue) {
+      _buildShuffleQueue(startIndex: index);
+    }
     mediaItem.add(_toMediaItem(song));
     _broadcastPlaybackState(_player.playbackEvent);
 
@@ -244,6 +264,11 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
 
   void setShuffleEnabled(bool enabled) {
     _shuffleEnabled = enabled;
+    if (_shuffleEnabled) {
+      _buildShuffleQueue(startIndex: currentIndex);
+    } else {
+      _resetShuffleQueue();
+    }
     _notifySettingsChanged();
     unawaited(_settingsStore.saveShuffleEnabled(enabled));
   }
@@ -257,7 +282,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     if (nextIndex == null) {
       return;
     }
-    await playSongAtIndex(nextIndex);
+    await _playSongAtIndex(nextIndex, resetShuffleQueue: false);
   }
 
   @override
@@ -273,7 +298,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     }
 
     final previousIndex = _previousIndex();
-    await playSongAtIndex(previousIndex);
+    await _playSongAtIndex(previousIndex, resetShuffleQueue: false);
   }
 
   Future<void> dispose() async {
@@ -299,7 +324,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
       return;
     }
 
-    await playSongAtIndex(nextIndex);
+    await _playSongAtIndex(nextIndex, resetShuffleQueue: false);
   }
 
   int? _nextIndex({required bool wrap}) {
@@ -312,11 +337,7 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     }
 
     if (_shuffleEnabled) {
-      var next = _random.nextInt(_songs.length);
-      while (next == currentIndex) {
-        next = _random.nextInt(_songs.length);
-      }
-      return next;
+      return _nextShuffleIndex(wrap: wrap);
     }
 
     final next = (currentIndex ?? -1) + 1;
@@ -333,15 +354,131 @@ class AppAudioHandler extends BaseAudioHandler with SeekHandler {
     }
 
     if (_shuffleEnabled) {
-      var previous = _random.nextInt(_songs.length);
-      while (previous == currentIndex) {
-        previous = _random.nextInt(_songs.length);
-      }
-      return previous;
+      return _previousShuffleIndex();
     }
 
     final current = currentIndex ?? 0;
     return current == 0 ? _songs.length - 1 : current - 1;
+  }
+
+  void _resetShuffleQueue() {
+    _shuffleOrder = [];
+    _shuffleCursor = -1;
+  }
+
+  void _buildShuffleQueue({int? startIndex}) {
+    if (_songs.isEmpty) {
+      _resetShuffleQueue();
+      return;
+    }
+
+    final order = List<int>.generate(_songs.length, (index) => index);
+    final hasValidStart =
+        startIndex != null && startIndex >= 0 && startIndex < _songs.length;
+
+    if (hasValidStart) {
+      order.remove(startIndex);
+      order.shuffle(_random);
+      _shuffleOrder = [startIndex, ...order];
+      _shuffleCursor = 0;
+      return;
+    }
+
+    order.shuffle(_random);
+    _shuffleOrder = order;
+    _shuffleCursor = -1;
+  }
+
+  bool _shuffleQueueIsValid() {
+    if (_shuffleOrder.isEmpty) {
+      return false;
+    }
+
+    return _shuffleOrder.every((index) => index >= 0 && index < _songs.length);
+  }
+
+  void _ensureShuffleQueue() {
+    final current = currentIndex;
+    final cursorMatchesCurrent =
+        _shuffleCursor >= 0 &&
+        _shuffleCursor < _shuffleOrder.length &&
+        _shuffleOrder[_shuffleCursor] == current;
+
+    if (!_shuffleQueueIsValid() || !cursorMatchesCurrent) {
+      _buildShuffleQueue(startIndex: current);
+    }
+  }
+
+  void _appendShuffleCycle() {
+    final current = currentIndex;
+    final order = List<int>.generate(_songs.length, (index) => index);
+    if (current != null && current >= 0 && current < _songs.length) {
+      order.remove(current);
+    }
+    order.shuffle(_random);
+    _shuffleOrder.addAll(order);
+  }
+
+  void _pruneShuffleHistory() {
+    if (_songs.isEmpty || _shuffleCursor <= 0) {
+      return;
+    }
+
+    final retainedHistory = _songs.length * _retainedShuffleHistoryCycles;
+    final removeCount = _shuffleCursor - retainedHistory;
+    if (removeCount <= 0) {
+      return;
+    }
+
+    _shuffleOrder.removeRange(0, removeCount);
+    _shuffleCursor -= removeCount;
+  }
+
+  int? _nextShuffleIndex({required bool wrap}) {
+    _ensureShuffleQueue();
+
+    if (_shuffleOrder.isEmpty) {
+      return null;
+    }
+
+    if (_shuffleCursor < 0) {
+      _shuffleCursor = 0;
+      return _shuffleOrder[_shuffleCursor];
+    }
+
+    final nextCursor = _shuffleCursor + 1;
+    if (nextCursor < _shuffleOrder.length) {
+      _shuffleCursor = nextCursor;
+      return _shuffleOrder[_shuffleCursor];
+    }
+
+    if (!wrap) {
+      return null;
+    }
+
+    _appendShuffleCycle();
+    if (_shuffleCursor + 1 >= _shuffleOrder.length) {
+      return null;
+    }
+
+    _shuffleCursor++;
+    _pruneShuffleHistory();
+    return _shuffleOrder[_shuffleCursor];
+  }
+
+  int _previousShuffleIndex() {
+    _ensureShuffleQueue();
+
+    if (_shuffleOrder.isEmpty) {
+      return 0;
+    }
+
+    if (_shuffleCursor > 0) {
+      _shuffleCursor--;
+      return _shuffleOrder[_shuffleCursor];
+    }
+
+    return _shuffleOrder[_shuffleCursor];
   }
 
   MediaItem _toMediaItem(Song song, {Duration? duration}) {

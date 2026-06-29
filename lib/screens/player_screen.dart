@@ -93,17 +93,21 @@ class _PlayerScreenState extends State<PlayerScreen> {
                           ),
                           const SizedBox(height: 8),
                           Expanded(
-                            child: isWide || isShort
-                                ? _WidePlayerLayout(
-                                    controller: controller,
-                                    maxWidth: constraints.maxWidth,
-                                    maxHeight: constraints.maxHeight,
-                                  )
-                                : _PortraitPlayerLayout(
-                                    controller: controller,
-                                    maxWidth: constraints.maxWidth,
-                                    maxHeight: constraints.maxHeight,
-                                  ),
+                            child: LayoutBuilder(
+                              builder: (context, contentConstraints) {
+                                return isWide || isShort
+                                    ? _WidePlayerLayout(
+                                        controller: controller,
+                                        maxWidth: contentConstraints.maxWidth,
+                                        maxHeight: contentConstraints.maxHeight,
+                                      )
+                                    : _PortraitPlayerLayout(
+                                        controller: controller,
+                                        maxWidth: contentConstraints.maxWidth,
+                                        maxHeight: contentConstraints.maxHeight,
+                                      );
+                              },
+                            ),
                           ),
                         ],
                       ),
@@ -167,31 +171,36 @@ class _PortraitPlayerLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final song = controller.currentSong;
-    final coverSize = math.min(maxWidth - 40, maxHeight * 0.42).clamp(220, 360);
+    final compact = maxHeight < 650;
+    final tight = maxHeight < 560;
+    final infoGap = tight ? 12.0 : 24.0;
+    final controlGap = tight ? 12.0 : 24.0;
+    final optionGap = tight ? 12.0 : 22.0;
+    final coverGap = tight
+        ? 16.0
+        : compact
+        ? 22.0
+        : 32.0;
+    final reservedHeight =
+        76 + 104 + 52 + 76 + 126 + coverGap + infoGap + controlGap + optionGap;
+    final coverSize = math
+        .min(maxWidth - 40, maxHeight - reservedHeight)
+        .clamp(132, 360)
+        .toDouble();
 
-    return SingleChildScrollView(
-      physics: const ClampingScrollPhysics(),
-      child: ConstrainedBox(
-        constraints: BoxConstraints(minHeight: math.max(0, maxHeight - 76)),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            _Cover(
-              controller: controller,
-              song: song,
-              size: coverSize.toDouble(),
-            ),
-            const SizedBox(height: 32),
-            _SongInfo(song: song),
-            const SizedBox(height: 24),
-            PlaybackProgress(controller: controller, showTimes: true),
-            const SizedBox(height: 24),
-            _TransportControls(controller: controller),
-            const SizedBox(height: 22),
-            PlaybackOptions(controller: controller),
-          ],
-        ),
-      ),
+    return Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        _Cover(controller: controller, song: song, size: coverSize),
+        SizedBox(height: coverGap),
+        _SongInfo(song: song),
+        SizedBox(height: infoGap),
+        PlaybackProgress(controller: controller, showTimes: true),
+        SizedBox(height: controlGap),
+        _TransportControls(controller: controller, compact: tight),
+        SizedBox(height: optionGap),
+        PlaybackOptions(controller: controller),
+      ],
     );
   }
 }
@@ -210,9 +219,13 @@ class _WidePlayerLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final song = controller.currentSong;
+    final tight = maxHeight < 460;
+    final infoGap = tight ? 12.0 : 22.0;
+    final controlGap = tight ? 12.0 : 22.0;
+    final optionGap = tight ? 12.0 : 18.0;
     final coverSize = math
-        .min(math.min(maxWidth * 0.36, maxHeight * 0.68), 360)
-        .clamp(180, 360)
+        .min(math.min(maxWidth * 0.36, maxHeight * 0.82), 360)
+        .clamp(150, 360)
         .toDouble();
 
     return Row(
@@ -228,23 +241,20 @@ class _WidePlayerLayout extends StatelessWidget {
           flex: 6,
           child: Align(
             alignment: Alignment.center,
-            child: SingleChildScrollView(
-              physics: const ClampingScrollPhysics(),
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 460),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    _SongInfo(song: song),
-                    const SizedBox(height: 22),
-                    PlaybackProgress(controller: controller, showTimes: true),
-                    const SizedBox(height: 22),
-                    _TransportControls(controller: controller),
-                    const SizedBox(height: 18),
-                    PlaybackOptions(controller: controller),
-                  ],
-                ),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 460),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  _SongInfo(song: song),
+                  SizedBox(height: infoGap),
+                  PlaybackProgress(controller: controller, showTimes: true),
+                  SizedBox(height: controlGap),
+                  _TransportControls(controller: controller, compact: tight),
+                  SizedBox(height: optionGap),
+                  PlaybackOptions(controller: controller),
+                ],
               ),
             ),
           ),
@@ -316,25 +326,30 @@ class _SongInfo extends StatelessWidget {
 }
 
 class _TransportControls extends StatelessWidget {
-  const _TransportControls({required this.controller});
+  const _TransportControls({required this.controller, this.compact = false});
 
   final PlayerController controller;
+  final bool compact;
 
   @override
   Widget build(BuildContext context) {
+    final playSize = compact ? 64.0 : 76.0;
+    final iconSize = compact ? 38.0 : 44.0;
+    final sideGap = compact ? 16.0 : 24.0;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
         IconButton(
           tooltip: '이전곡',
           onPressed: controller.hasSongs ? controller.previous : null,
-          iconSize: 44,
+          iconSize: iconSize,
           icon: const Icon(Icons.skip_previous_rounded),
         ),
-        const SizedBox(width: 24),
+        SizedBox(width: sideGap),
         SizedBox(
-          width: 76,
-          height: 76,
+          width: playSize,
+          height: playSize,
           child: FilledButton(
             style: FilledButton.styleFrom(
               backgroundColor: AppColors.accent,
@@ -347,15 +362,15 @@ class _TransportControls extends StatelessWidget {
               controller.isPlaying
                   ? Icons.pause_rounded
                   : Icons.play_arrow_rounded,
-              size: 44,
+              size: iconSize,
             ),
           ),
         ),
-        const SizedBox(width: 24),
+        SizedBox(width: sideGap),
         IconButton(
           tooltip: '다음곡',
           onPressed: controller.hasSongs ? controller.next : null,
-          iconSize: 44,
+          iconSize: iconSize,
           icon: const Icon(Icons.skip_next_rounded),
         ),
       ],
